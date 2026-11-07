@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../../../core/constants/app_colors.dart';
 import '../../../data/models/category_model.dart';
@@ -8,6 +9,7 @@ import '../../../data/models/transaction_model.dart';
 import '../../../data/repositories/category_repository.dart';
 import '../../../data/repositories/transaction_repository.dart';
 
+import '../../../core/services/receipt_scan_service.dart';
 import '../../../core/services/voice_input_service.dart';
 
 class AddTransactionScreen extends StatefulWidget {
@@ -31,6 +33,8 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
 
   final _txRepo = TransactionRepository();
   final _catRepo = CategoryRepository();
+
+  bool _isScanning = false;
 
   bool get _isEditing => widget.initial != null;
 
@@ -289,6 +293,126 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
     VoiceInputService.instance.stopListening();
   }
 
+  String _formatThousands(int v) {
+    final s = v.toString();
+    final buf = StringBuffer();
+    for (var i = 0; i < s.length; i++) {
+      if (i > 0 && (s.length - i) % 3 == 0) buf.write('.');
+      buf.write(s[i]);
+    }
+    return buf.toString();
+  }
+
+  Future<void> _startReceiptScan() async {
+    final source = await showModalBottomSheet<ImageSource>(
+      context: context,
+      backgroundColor: AppColors.surface(context),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Scan Struk',
+              style: GoogleFonts.plusJakartaSans(
+                fontSize: 17,
+                fontWeight: FontWeight.w800,
+                color: AppColors.bodyText(context),
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'Foto struk belanja, total dan tanggalnya akan terisi otomatis.',
+              style: GoogleFonts.plusJakartaSans(
+                fontSize: 13,
+                color: AppColors.subText(context),
+              ),
+            ),
+            const SizedBox(height: 14),
+            ListTile(
+              leading: const Icon(Icons.photo_camera_rounded),
+              title: Text(
+                'Kamera',
+                style: GoogleFonts.plusJakartaSans(fontWeight: FontWeight.w600),
+              ),
+              onTap: () => Navigator.pop(ctx, ImageSource.camera),
+            ),
+            ListTile(
+              leading: const Icon(Icons.photo_library_rounded),
+              title: Text(
+                'Galeri / Upload',
+                style: GoogleFonts.plusJakartaSans(fontWeight: FontWeight.w600),
+              ),
+              onTap: () => Navigator.pop(ctx, ImageSource.gallery),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (source == null) return;
+
+    setState(() => _isScanning = true);
+    try {
+      final result = await ReceiptScanService.instance.scanReceipt(source);
+      if (!mounted) return;
+      if (result == null) return; // Pengguna membatalkan pemilihan gambar.
+      if (!result.foundAnything) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Tidak ada data terbaca dari struk. Coba foto yang lebih jelas dan terang.',
+            ),
+          ),
+        );
+        return;
+      }
+
+      final wasIncome = !_isExpense;
+      setState(() {
+        // Struk belanja selalu pengeluaran.
+        _isExpense = true;
+        if (wasIncome) _selectedCategory = null;
+        if (result.amount != null && result.amount! > 0) {
+          _amountController.text = result.amount.toString();
+        }
+        if (result.date != null) _selectedDate = result.date!;
+        if (result.merchant != null && _notesController.text.trim().isEmpty) {
+          _notesController.text = 'Struk: ${result.merchant}';
+        }
+      });
+      if (wasIncome) _loadCategories();
+
+      final found = <String>[];
+      if (result.amount != null) {
+        found.add('Rp ${_formatThousands(result.amount!)}');
+      }
+      if (result.merchant != null) found.add(result.merchant!);
+      if (result.date != null) found.add(_formatDate(result.date!));
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Struk terbaca: ${found.join(' • ')}.'
+            '${result.amount == null ? ' Total tidak terbaca, isi manual ya.' : ''}'
+            ' Cek lagi sebelum disimpan.',
+          ),
+        ),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Gagal memindai struk. Coba lagi.'),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _isScanning = false);
+    }
+  }
+
   Future<void> _save() async {
     final amount = int.tryParse(_amountController.text) ?? 0;
     if (amount <= 0) {
@@ -338,6 +462,28 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
           ),
         ),
         actions: [
+          IconButton(
+            onPressed: _isScanning ? null : _startReceiptScan,
+            icon: Container(
+              width: 38,
+              height: 38,
+              decoration: BoxDecoration(
+                color: AppColors.incomeContainer,
+                shape: BoxShape.circle,
+              ),
+              child: _isScanning
+                  ? const Padding(
+                      padding: EdgeInsets.all(9),
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(
+                      Icons.document_scanner_outlined,
+                      color: AppColors.primary,
+                      size: 20,
+                    ),
+            ),
+            tooltip: 'Scan Struk',
+          ),
           IconButton(
             onPressed: _startVoiceInput,
             icon: Container(
