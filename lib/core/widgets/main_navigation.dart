@@ -26,7 +26,9 @@ class _MainNavigationState extends State<MainNavigation> {
       DashboardScreen(
         onSeeAllTransactions: () => setState(() => _currentIndex = 1),
       ),
-      const TransactionsScreen(),
+      TransactionsScreen(
+        onOpenReports: () => setState(() => _currentIndex = 2),
+      ),
       const ReportsScreen(),
       const CategoriesScreen(),
       const SettingsScreen(),

@@ -5,6 +5,7 @@ import '../../../core/constants/app_colors.dart';
 import '../../../data/models/transaction_model.dart';
 import '../../../data/repositories/transaction_repository.dart';
 import 'add_transaction_screen.dart';
+import '../../reports/screens/reports_screen.dart';
 
 // ══════════════════════════════════════════
 //  Data Model (dummy)
@@ -63,7 +64,9 @@ String _formatRupiah(int amount) {
 //  MAIN SCREEN
 // ══════════════════════════════════════════
 class TransactionsScreen extends StatefulWidget {
-  const TransactionsScreen({super.key});
+  const TransactionsScreen({super.key, this.onOpenReports});
+
+  final VoidCallback? onOpenReports;
 
   @override
   State<TransactionsScreen> createState() => _TransactionsScreenState();
@@ -294,7 +297,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                               onEdit: _editTransaction,
                             )),
                             const SizedBox(height: 16),
-                            const _SummaryCard(),
+                            _SummaryCard(onOpenReports: widget.onOpenReports),
                           ],
                         ),
             ),
@@ -675,7 +678,9 @@ class _TransactionTile extends StatelessWidget {
 //  SUMMARY BANNER CARD
 // ══════════════════════════════════════════
 class _SummaryCard extends StatefulWidget {
-  const _SummaryCard();
+  const _SummaryCard({this.onOpenReports});
+
+  final VoidCallback? onOpenReports;
 
   @override
   State<_SummaryCard> createState() => _SummaryCardState();
@@ -786,9 +791,17 @@ class _SummaryCardState extends State<_SummaryCard> {
               const SizedBox(height: 18),
               TextButton(
                 onPressed: () {
-                  // Navigate to reports tab via main navigation
-                  final nav = Navigator.of(context);
-                  if (nav.canPop()) nav.pop();
+
+
+                  if (widget.onOpenReports != null) {
+                    widget.onOpenReports!();
+                  } else {
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => const ReportsScreen(),
+                      ),
+                    );
+                  }
                 },
                 style: TextButton.styleFrom(
                   backgroundColor: Colors.white,
