@@ -190,13 +190,56 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
 
     // Start listening BEFORE showing bottom sheet
     VoiceInputService.instance.startListening(
-      onResult: (text) {
+      onResult: (text) async {
         spokenText = text;
-        bsState?.call(() {});
         final parsed = VoiceInputService.instance.parseIndonesianSpeech(text);
+        if (!mounted) return;
+
+        final wasExpense = _isExpense;
+        final typeChanged = wasExpense != parsed.isExpense;
+
+        if (typeChanged) {
+          setState(() {
+            _isExpense = parsed.isExpense;
+            _selectedCategory = null;
+          });
+          await _loadCategories();
+        }
+
+        // Auto-match kategori
+        CategoryModel? matched;
+        if (_categories.isNotEmpty) {
+          if (parsed.categoryKeyword != null) {
+            final kw = parsed.categoryKeyword!.toLowerCase();
+            matched = _categories
+                .where((c) => c.name.toLowerCase() == kw)
+                .firstOrNull ??
+                _categories
+                    .where((c) =>
+                        c.name.toLowerCase().contains(kw) ||
+                        kw.contains(c.name.toLowerCase()))
+                    .firstOrNull;
+          }
+
+          // Fallback: cek jika ada nama kategori dari _categories yang ada di ucapan
+          if (matched == null) {
+            final textLower = text.toLowerCase();
+            for (final cat in _categories) {
+              final catNameLower = cat.name.toLowerCase();
+              if (textLower.contains(catNameLower)) {
+                matched = cat;
+                break;
+              }
+            }
+          }
+        }
+
         if (mounted) {
           setState(() {
             _isExpense = parsed.isExpense;
+            if (matched != null) {
+              _selectedCategory = matched;
+            }
             if (parsed.amount != null && parsed.amount! > 0) {
               _amountController.text = parsed.amount.toString();
             }
@@ -205,6 +248,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
             }
           });
         }
+        bsState?.call(() {});
       },
       onListeningStatusChanged: (status) {
         listening = status;
@@ -222,6 +266,8 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setBsState) {
           bsState = setBsState;
+          final currentAmount = int.tryParse(_amountController.text) ?? 0;
+
           return Padding(
             padding: const EdgeInsets.all(24),
             child: Column(
@@ -254,7 +300,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
                 const SizedBox(height: 8),
                 Text(
                   spokenText.isEmpty
-                      ? 'Katakan sesuatu seperti:\n"Pengeluaran 50 ribu makan siang"\natau "Pemasukan 2 juta gaji"'
+                      ? 'Katakan sesuatu seperti:\n"beli makan 10000"\natau "bayar internet 250 ribu"'
                       : '"$spokenText"',
                   textAlign: TextAlign.center,
                   style: GoogleFonts.plusJakartaSans(
@@ -262,6 +308,77 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
                     color: AppColors.subText(context),
                   ),
                 ),
+                if (spokenText.isNotEmpty) ...[
+                  const SizedBox(height: 14),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 14, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: _isExpense
+                          ? AppColors.expenseContainer.withValues(alpha: 0.5)
+                          : AppColors.incomeContainer.withValues(alpha: 0.5),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: _isExpense
+                            ? AppColors.expense.withValues(alpha: 0.2)
+                            : AppColors.primary.withValues(alpha: 0.2),
+                      ),
+                    ),
+                    child: Wrap(
+                      alignment: WrapAlignment.center,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      spacing: 8,
+                      runSpacing: 4,
+                      children: [
+                        Text(
+                          _isExpense ? 'Pengeluaran' : 'Pemasukan',
+                          style: GoogleFonts.plusJakartaSans(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                            color: _isExpense
+                                ? AppColors.expense
+                                : AppColors.primary,
+                          ),
+                        ),
+                        if (_selectedCategory != null) ...[
+                          const Text('•',
+                              style: TextStyle(color: Colors.grey)),
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                _selectedCategory!.icon,
+                                size: 14,
+                                color: _selectedCategory!.color,
+                              ),
+                              const SizedBox(width: 4),
+                              Text(
+                                _selectedCategory!.name,
+                                style: GoogleFonts.plusJakartaSans(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w700,
+                                  color: AppColors.bodyText(context),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                        if (currentAmount > 0) ...[
+                          const Text('•',
+                              style: TextStyle(color: Colors.grey)),
+                          Text(
+                            'Rp ${_formatThousands(currentAmount)}',
+                            style: GoogleFonts.plusJakartaSans(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w800,
+                              color: AppColors.bodyText(context),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 24),
                 ElevatedButton(
                   onPressed: () {
@@ -279,7 +396,8 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
                   ),
                   child: Text(
                     spokenText.isEmpty ? 'Tutup' : 'Gunakan Data Suara',
-                    style: GoogleFonts.plusJakartaSans(fontWeight: FontWeight.w700),
+                    style: GoogleFonts.plusJakartaSans(
+                        fontWeight: FontWeight.w700),
                   ),
                 ),
               ],
@@ -291,6 +409,22 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
 
     // Ensure listening stopped when sheet is dismissed
     VoiceInputService.instance.stopListening();
+
+    if (mounted && spokenText.isNotEmpty) {
+      final info = <String>[
+        _isExpense ? 'Pengeluaran' : 'Pemasukan',
+      ];
+      if (_selectedCategory != null) info.add(_selectedCategory!.name);
+      final amt = int.tryParse(_amountController.text) ?? 0;
+      if (amt > 0) info.add('Rp ${_formatThousands(amt)}');
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Suara terbaca: ${info.join(' • ')}'),
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    }
   }
 
   String _formatThousands(int v) {
@@ -417,7 +551,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            'Struk terbaca: ${found.join(' • ')}.'
+            'Struk terbaca: ${found.join(' â€¢ ')}.'
             '${result.amount == null ? ' Total tidak terbaca, isi manual ya.' : ''}'
             ' Cek lagi sebelum disimpan.',
           ),
@@ -536,7 +670,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // ── Toggle Type ──
+                  // â”€â”€ Toggle Type â”€â”€
                   _TypeToggle(
                     isExpense: _isExpense,
                     onChanged: (v) {
@@ -549,14 +683,14 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
                   ),
                   const SizedBox(height: 16),
 
-                  // ── Amount Card ──
+                  // â”€â”€ Amount Card â”€â”€
                   _AmountCard(
                     controller: _amountController,
                     focusNode: _amountFocus,
                   ),
                   const SizedBox(height: 20),
 
-                  // ── Kategori ──
+                  // â”€â”€ Kategori â”€â”€
                   _FieldLabel('Kategori'),
                   const SizedBox(height: 6),
                   _TapField(
@@ -574,7 +708,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
                   ),
                   const SizedBox(height: 14),
 
-                  // ── Tanggal ──
+                  // â”€â”€ Tanggal â”€â”€
                   _FieldLabel('Tanggal'),
                   const SizedBox(height: 6),
                   _TapField(
@@ -584,7 +718,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
                   ),
                   const SizedBox(height: 14),
 
-                  // ── Dompet ──
+                  // â”€â”€ Dompet â”€â”€
                   _FieldLabel('Dompet / Akun'),
                   const SizedBox(height: 6),
                   _TapField(
@@ -602,7 +736,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
                   ),
                   const SizedBox(height: 14),
 
-                  // ── Catatan ──
+                  // â”€â”€ Catatan â”€â”€
                   _FieldLabel('Catatan'),
                   const SizedBox(height: 6),
                   _NotesField(controller: _notesController),
@@ -611,7 +745,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
             ),
           ),
 
-          // ── Save Button ──
+          // â”€â”€ Save Button â”€â”€
           Padding(
             padding: EdgeInsets.fromLTRB(16, 8, 16, bottom + 16),
             child: SizedBox(
@@ -650,9 +784,9 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
   }
 }
 
-// ═══════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 //  CATEGORY PICKER BOTTOM SHEET
-// ═══════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 class _CategoryPickerSheet extends StatelessWidget {
   const _CategoryPickerSheet({
     required this.categories,
@@ -755,9 +889,9 @@ class _CategoryPickerSheet extends StatelessWidget {
   }
 }
 
-// ═══════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 //  TYPE TOGGLE
-// ═══════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 class _TypeToggle extends StatelessWidget {
   const _TypeToggle({required this.isExpense, required this.onChanged});
   final bool isExpense;
@@ -826,9 +960,9 @@ class _ToggleBtn extends StatelessWidget {
   }
 }
 
-// ═══════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 //  AMOUNT CARD
-// ═══════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 class _AmountCard extends StatelessWidget {
   const _AmountCard({required this.controller, required this.focusNode});
   final TextEditingController controller;
@@ -897,9 +1031,9 @@ class _AmountCard extends StatelessWidget {
   }
 }
 
-// ═══════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 //  FIELD LABEL
-// ═══════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 class _FieldLabel extends StatelessWidget {
   const _FieldLabel(this.label);
   final String label;
@@ -917,9 +1051,9 @@ class _FieldLabel extends StatelessWidget {
   }
 }
 
-// ═══════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 //  TAP FIELD (Kategori, Tanggal, Dompet)
-// ═══════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 class _TapField extends StatelessWidget {
   const _TapField({
     required this.icon,
@@ -971,9 +1105,9 @@ class _TapField extends StatelessWidget {
 }
 
 
-// ═══════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 //  NOTES FIELD
-// ═══════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 class _NotesField extends StatelessWidget {
   const _NotesField({required this.controller});
   final TextEditingController controller;
