@@ -3,6 +3,41 @@ import 'package:catat_keuangan/core/services/voice_input_service.dart';
 
 void main() {
   group('VoiceInputService Indonesian Speech Parser Tests', () {
+    test('User test case: "tambah 20000 paket internet" should map to Internet with amount 20000', () {
+      final res = VoiceInputService.instance.parseIndonesianSpeech('tambah 20000 paket internet');
+      expect(res.amount, 20000);
+      expect(res.isExpense, true);
+      expect(res.categoryKeyword, 'Internet');
+    });
+
+    test('User test case: "tambah Rp20.000 paket internet" handles currency prefix', () {
+      final res = VoiceInputService.instance.parseIndonesianSpeech('tambah Rp20.000 paket internet');
+      expect(res.amount, 20000);
+      expect(res.isExpense, true);
+      expect(res.categoryKeyword, 'Internet');
+    });
+
+    test('User test case: "tambah Rp 20.000 paket internet"', () {
+      final res = VoiceInputService.instance.parseIndonesianSpeech('tambah Rp 20.000 paket internet');
+      expect(res.amount, 20000);
+      expect(res.isExpense, true);
+      expect(res.categoryKeyword, 'Internet');
+    });
+
+    test('User test case: "tambah 20.000,00 paket data"', () {
+      final res = VoiceInputService.instance.parseIndonesianSpeech('tambah 20.000,00 paket data');
+      expect(res.amount, 20000);
+      expect(res.isExpense, true);
+      expect(res.categoryKeyword, 'Internet');
+    });
+
+    test('User test case: "tambah dua puluh ribu paket internet"', () {
+      final res = VoiceInputService.instance.parseIndonesianSpeech('tambah dua puluh ribu paket internet');
+      expect(res.amount, 20000);
+      expect(res.isExpense, true);
+      expect(res.categoryKeyword, 'Internet');
+    });
+
     test('User test case: "aku beli makan 10000" should map to Makanan with amount 10000', () {
       final res = VoiceInputService.instance.parseIndonesianSpeech('aku beli makan 10000');
       expect(res.amount, 10000);
@@ -10,16 +45,30 @@ void main() {
       expect(res.categoryKeyword, 'Makanan');
     });
 
-    test('User test case: "bayar internet 250000" should map to Rumah with amount 250000', () {
+    test('User test case: "bayar internet 250000" should map to Internet with amount 250000', () {
       final res = VoiceInputService.instance.parseIndonesianSpeech('bayar internet 250000');
       expect(res.amount, 250000);
+      expect(res.isExpense, true);
+      expect(res.categoryKeyword, 'Internet');
+    });
+
+    test('User test case: "bayar wifi indihome 350 ribu" should map to Internet with amount 350000', () {
+      final res = VoiceInputService.instance.parseIndonesianSpeech('bayar wifi indihome 350 ribu');
+      expect(res.amount, 350000);
+      expect(res.isExpense, true);
+      expect(res.categoryKeyword, 'Internet');
+    });
+
+    test('Home category: "bayar tagihan listrik 150000" should map to Rumah', () {
+      final res = VoiceInputService.instance.parseIndonesianSpeech('bayar tagihan listrik 150000');
+      expect(res.amount, 150000);
       expect(res.isExpense, true);
       expect(res.categoryKeyword, 'Rumah');
     });
 
-    test('User test case: "bayar wifi indihome 350 ribu" should map to Rumah with amount 350000', () {
-      final res = VoiceInputService.instance.parseIndonesianSpeech('bayar wifi indihome 350 ribu');
-      expect(res.amount, 350000);
+    test('Home category: "beli token pln 50rb" should map to Rumah', () {
+      final res = VoiceInputService.instance.parseIndonesianSpeech('beli token pln 50rb');
+      expect(res.amount, 50000);
       expect(res.isExpense, true);
       expect(res.categoryKeyword, 'Rumah');
     });
@@ -87,7 +136,7 @@ void main() {
       expect(res.categoryKeyword, 'Makanan');
     });
 
-    test('Spoken numbers decimal: "bayar kos satu koma lima juta"', () {
+    test('Spoken numbers decimal: "bayar kos 1.5 juta"', () {
       final res = VoiceInputService.instance.parseIndonesianSpeech('bayar kos 1.5 juta');
       expect(res.amount, 1500000);
       expect(res.isExpense, true);

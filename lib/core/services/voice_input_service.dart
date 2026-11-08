@@ -124,7 +124,18 @@ class VoiceInputService {
   /// Ekstraksi kategori dari ucapan Bahasa Indonesia
   static String? _extractCategory(String text, bool isExpense) {
     if (isExpense) {
-      // 1. Makanan & Minuman
+      // 1. Internet & Paket Data (diprioritaskan)
+      const internetKeywords = [
+        'internet', 'paket internet', 'wifi', 'wi-fi', 'paket data', 'data',
+        'kuota', 'pulsa', 'indihome', 'biznet', 'first media', 'iconnet',
+        'myrepublic', 'telkomsel', 'indosat', 'tri', 'xl', 'smartfren',
+        'by.u', 'byu',
+      ];
+      if (internetKeywords.any((kw) => _containsWord(text, kw))) {
+        return 'Internet';
+      }
+
+      // 2. Makanan & Minuman
       const foodKeywords = [
         'makan', 'makanan', 'minum', 'minuman', 'sarapan', 'lunch', 'dinner',
         'jajan', 'jajanan', 'cemilan', 'camilan', 'snack', 'kopi', 'coffee',
@@ -139,15 +150,13 @@ class VoiceInputService {
         return 'Makanan';
       }
 
-      // 2. Rumah & Tagihan (Internet, Wifi, Listrik, Air, Pulsa)
+      // 3. Rumah & Properti (Listrik, Air, Gas, Sewa Rumah)
       const homeKeywords = [
-        'internet', 'wifi', 'wi-fi', 'indihome', 'biznet', 'first media',
-        'iconnet', 'kuota', 'pulsa', 'paket data', 'telkomsel', 'indosat',
-        'xl', 'tri', 'smartfren', 'listrik', 'pln', 'token', 'token listrik',
-        'air', 'pdam', 'gas', 'lpg', 'elpiji', 'galon', 'aqua galon',
-        'kontrakan', 'kos', 'kost', 'kostan', 'sewa rumah', 'iuran',
-        'kebersihan', 'sampah', 'keamanan', 'renovasi', 'pompa air',
-        'pajak bumi', 'pbb', 'genteng', 'cat rumah', 'ledeng',
+        'listrik', 'pln', 'token', 'token listrik', 'air', 'pdam', 'gas',
+        'lpg', 'elpiji', 'galon', 'aqua galon', 'kontrakan', 'kos', 'kost',
+        'kostan', 'sewa rumah', 'iuran', 'kebersihan', 'sampah', 'keamanan',
+        'renovasi', 'pompa air', 'pajak bumi', 'pbb', 'genteng', 'cat rumah',
+        'ledeng', 'rumah',
       ];
       if (homeKeywords.any((kw) => _containsWord(text, kw))) {
         return 'Rumah';
@@ -278,12 +287,24 @@ class VoiceInputService {
 
   /// Ekstraksi jumlah uang (nominal) dari teks numerik atau kata-kata Bahasa Indonesia
   static int? _extractAmountFromText(String text) {
-    // 1. Pola Angka dengan Suffix: cth "10 ribu", "2.5 juta", "50rb", "100k", "1.5jt"
+    // 1. Normalisasi teks:
+    // a. Hapus prefix mata uang seperti 'rp', 'rp.', 'idr' yang menempel langsung ke angka
+    //    cth: "rp20.000" -> " 20.000", "rp.20000" -> " 20000"
+    String normalized = text.replaceAll(
+      RegExp(r'\b(rp|idr)\.?\s*', caseSensitive: false),
+      ' ',
+    );
+
+    // b. Bersihkan desimal sen rupiah di akhir nominal (cth: ",00" atau ".00" di akhir angka)
+    //    cth: "20.000,00" -> "20.000"
+    normalized = normalized.replaceAll(RegExp(r'(?<=\d)[,\.]00(?!\d)'), '');
+
+    // 2. Pola Angka dengan Suffix: cth "10 ribu", "2.5 juta", "50rb", "100k", "1.5jt"
     final suffixReg = RegExp(
       r'(\d+(?:[,\.]\d+)?)\s*(juta|jt|ribu|rb|k)\b',
       caseSensitive: false,
     );
-    final suffixMatch = suffixReg.firstMatch(text);
+    final suffixMatch = suffixReg.firstMatch(normalized);
     if (suffixMatch != null) {
       final numStr = suffixMatch.group(1)!.replaceAll(',', '.');
       final unit = suffixMatch.group(2)!.toLowerCase();
@@ -297,33 +318,33 @@ class VoiceInputService {
       }
     }
 
-    // 2. Pola Angka Berformat Ribuan: cth "10.000", "250.000", "1.500.000"
-    final formattedReg = RegExp(r'\b(\d{1,3}(?:\.\d{3})+)\b');
-    final formattedMatch = formattedReg.firstMatch(text);
+    // 3. Pola Angka Berformat Ribuan: cth "10.000", "250.000", "1.500.000"
+    final formattedReg = RegExp(r'(?:^|[^\d])(\d{1,3}(?:\.\d{3})+)(?:[^\d]|$)');
+    final formattedMatch = formattedReg.firstMatch(normalized);
     if (formattedMatch != null) {
       final cleanNum = formattedMatch.group(1)!.replaceAll('.', '');
       final parsed = int.tryParse(cleanNum);
       if (parsed != null && parsed > 0) return parsed;
     }
 
-    // 3. Pola Angka Numerik Biasa: cth "10000", "50000"
-    final numReg = RegExp(r'\b(\d+)\b');
-    final matches = numReg.allMatches(text);
+    // 4. Pola Angka Numerik Biasa: cth "10000", "50000"
+    final numReg = RegExp(r'(?:^|[^\d])(\d+)(?:[^\d]|$)');
+    final matches = numReg.allMatches(normalized);
     for (final match in matches) {
       final parsed = int.tryParse(match.group(1)!);
       if (parsed != null && parsed > 0) {
         // Cek jika teks secara umum mengandung kata pengali
-        if (text.contains('juta') || text.contains('jt')) {
+        if (normalized.contains('juta') || normalized.contains('jt')) {
           return parsed < 1000 ? parsed * 1000000 : parsed;
-        } else if (text.contains('ribu') || text.contains('rb') || text.contains('k')) {
+        } else if (normalized.contains('ribu') || normalized.contains('rb') || normalized.contains('k')) {
           return parsed < 1000 ? parsed * 1000 : parsed;
         }
         return parsed;
       }
     }
 
-    // 4. Pola Kata-Kata Angka Bahasa Indonesia: cth "sepuluh ribu", "dua puluh lima ribu"
-    return _parseIndonesianWordNumbers(text);
+    // 5. Pola Kata-Kata Angka Bahasa Indonesia: cth "sepuluh ribu", "dua puluh lima ribu"
+    return _parseIndonesianWordNumbers(normalized);
   }
 
   /// Parser kata-kata numerik Bahasa Indonesia (misal: "dua puluh lima ribu" -> 25000)

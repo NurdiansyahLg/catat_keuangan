@@ -183,6 +183,56 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
     if (result != null) setState(() => _selectedWallet = result);
   }
 
+  void _applyVoiceResult(VoiceTransactionResult parsed, String rawText) {
+    _isExpense = parsed.isExpense;
+
+    // Auto-match kategori
+    if (_categories.isNotEmpty) {
+      CategoryModel? matched;
+      final textLower = rawText.toLowerCase();
+
+      // Prioritas 1: Langsung cek nama kategori dari _categories (terpanjang dulu)
+      // Cth: "paket internet" / "internet" -> langsung cocok ke kategori "Internet"
+      final sortedCats = List<CategoryModel>.from(_categories)
+        ..sort((a, b) => b.name.length.compareTo(a.name.length));
+
+      for (final cat in sortedCats) {
+        final catNameLower = cat.name.toLowerCase();
+        if (textLower.contains(catNameLower)) {
+          matched = cat;
+          break;
+        }
+      }
+
+      // Prioritas 2: Gunakan categoryKeyword hasil inferensi VoiceInputService
+      if (matched == null && parsed.categoryKeyword != null) {
+        final kw = parsed.categoryKeyword!.toLowerCase();
+        matched = _categories
+            .where((c) => c.name.toLowerCase() == kw)
+            .firstOrNull ??
+            _categories
+                .where((c) =>
+                    c.name.toLowerCase().contains(kw) ||
+                    kw.contains(c.name.toLowerCase()))
+                .firstOrNull;
+      }
+
+      if (matched != null) {
+        _selectedCategory = matched;
+      }
+    }
+
+    // Nominal
+    if (parsed.amount != null && parsed.amount! > 0) {
+      _amountController.text = parsed.amount.toString();
+    }
+
+    // Catatan
+    if (rawText.isNotEmpty) {
+      _notesController.text = rawText;
+    }
+  }
+
   Future<void> _startVoiceInput() async {
     String spokenText = '';
     bool listening = true;
@@ -206,46 +256,9 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
           await _loadCategories();
         }
 
-        // Auto-match kategori
-        CategoryModel? matched;
-        if (_categories.isNotEmpty) {
-          if (parsed.categoryKeyword != null) {
-            final kw = parsed.categoryKeyword!.toLowerCase();
-            matched = _categories
-                .where((c) => c.name.toLowerCase() == kw)
-                .firstOrNull ??
-                _categories
-                    .where((c) =>
-                        c.name.toLowerCase().contains(kw) ||
-                        kw.contains(c.name.toLowerCase()))
-                    .firstOrNull;
-          }
-
-          // Fallback: cek jika ada nama kategori dari _categories yang ada di ucapan
-          if (matched == null) {
-            final textLower = text.toLowerCase();
-            for (final cat in _categories) {
-              final catNameLower = cat.name.toLowerCase();
-              if (textLower.contains(catNameLower)) {
-                matched = cat;
-                break;
-              }
-            }
-          }
-        }
-
         if (mounted) {
           setState(() {
-            _isExpense = parsed.isExpense;
-            if (matched != null) {
-              _selectedCategory = matched;
-            }
-            if (parsed.amount != null && parsed.amount! > 0) {
-              _amountController.text = parsed.amount.toString();
-            }
-            if (text.isNotEmpty) {
-              _notesController.text = text;
-            }
+            _applyVoiceResult(parsed, text);
           });
         }
         bsState?.call(() {});
@@ -408,9 +421,15 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
     );
 
     // Ensure listening stopped when sheet is dismissed
-    VoiceInputService.instance.stopListening();
+    await VoiceInputService.instance.stopListening();
 
     if (mounted && spokenText.isNotEmpty) {
+      final finalParsed =
+          VoiceInputService.instance.parseIndonesianSpeech(spokenText);
+      setState(() {
+        _applyVoiceResult(finalParsed, spokenText);
+      });
+
       final info = <String>[
         _isExpense ? 'Pengeluaran' : 'Pemasukan',
       ];
