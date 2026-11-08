@@ -361,7 +361,8 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
       if (!mounted) return;
       if (result == null) return; // Pengguna membatalkan pemilihan gambar.
       if (!result.foundAnything) {
-        ScaffoldMessenger.of(context).showSnackBar(
+        if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text(
               'Tidak ada data terbaca dari struk. Coba foto yang lebih jelas dan terang.',
@@ -384,14 +385,35 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
           _notesController.text = 'Struk: ${result.merchant}';
         }
       });
-      if (wasIncome) _loadCategories();
+      if (wasIncome) {
+        await _loadCategories();
+      }
+
+      if (result.categorySuggestion != null && _categories.isNotEmpty) {
+        final suggestionLower = result.categorySuggestion!.toLowerCase();
+        final matchedCategory = _categories
+                .where((c) => c.name.toLowerCase() == suggestionLower)
+                .firstOrNull ??
+            _categories
+                .where((c) =>
+                    c.name.toLowerCase().contains(suggestionLower) ||
+                    suggestionLower.contains(c.name.toLowerCase()))
+                .firstOrNull;
+        if (matchedCategory != null && mounted) {
+          setState(() {
+            _selectedCategory = matchedCategory;
+          });
+        }
+      }
 
       final found = <String>[];
       if (result.amount != null) {
         found.add('Rp ${_formatThousands(result.amount!)}');
       }
       if (result.merchant != null) found.add(result.merchant!);
+      if (_selectedCategory != null) found.add(_selectedCategory!.name);
       if (result.date != null) found.add(_formatDate(result.date!));
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
@@ -402,6 +424,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
         ),
       );
     } catch (_) {
+      if (!mounted) return;
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -416,6 +439,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
   Future<void> _save() async {
     final amount = int.tryParse(_amountController.text) ?? 0;
     if (amount <= 0) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Jumlah harus lebih dari 0')),
       );
