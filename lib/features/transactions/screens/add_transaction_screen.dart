@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../../../core/constants/app_colors.dart';
 import '../../../data/models/category_model.dart';
@@ -8,6 +9,7 @@ import '../../../data/models/transaction_model.dart';
 import '../../../data/repositories/category_repository.dart';
 import '../../../data/repositories/transaction_repository.dart';
 
+import '../../../core/services/receipt_scan_service.dart';
 import '../../../core/services/voice_input_service.dart';
 
 class AddTransactionScreen extends StatefulWidget {
@@ -31,6 +33,8 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
 
   final _txRepo = TransactionRepository();
   final _catRepo = CategoryRepository();
+
+  bool _isScanning = false;
 
   bool get _isEditing => widget.initial != null;
 
@@ -179,6 +183,56 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
     if (result != null) setState(() => _selectedWallet = result);
   }
 
+  void _applyVoiceResult(VoiceTransactionResult parsed, String rawText) {
+    _isExpense = parsed.isExpense;
+
+    // Auto-match kategori
+    if (_categories.isNotEmpty) {
+      CategoryModel? matched;
+      final textLower = rawText.toLowerCase();
+
+      // Prioritas 1: Langsung cek nama kategori dari _categories (terpanjang dulu)
+      // Cth: "paket internet" / "internet" -> langsung cocok ke kategori "Internet"
+      final sortedCats = List<CategoryModel>.from(_categories)
+        ..sort((a, b) => b.name.length.compareTo(a.name.length));
+
+      for (final cat in sortedCats) {
+        final catNameLower = cat.name.toLowerCase();
+        if (textLower.contains(catNameLower)) {
+          matched = cat;
+          break;
+        }
+      }
+
+      // Prioritas 2: Gunakan categoryKeyword hasil inferensi VoiceInputService
+      if (matched == null && parsed.categoryKeyword != null) {
+        final kw = parsed.categoryKeyword!.toLowerCase();
+        matched = _categories
+            .where((c) => c.name.toLowerCase() == kw)
+            .firstOrNull ??
+            _categories
+                .where((c) =>
+                    c.name.toLowerCase().contains(kw) ||
+                    kw.contains(c.name.toLowerCase()))
+                .firstOrNull;
+      }
+
+      if (matched != null) {
+        _selectedCategory = matched;
+      }
+    }
+
+    // Nominal
+    if (parsed.amount != null && parsed.amount! > 0) {
+      _amountController.text = parsed.amount.toString();
+    }
+
+    // Catatan
+    if (rawText.isNotEmpty) {
+      _notesController.text = rawText;
+    }
+  }
+
   Future<void> _startVoiceInput() async {
     String spokenText = '';
     bool listening = true;
@@ -186,21 +240,28 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
 
     // Start listening BEFORE showing bottom sheet
     VoiceInputService.instance.startListening(
-      onResult: (text) {
+      onResult: (text) async {
         spokenText = text;
-        bsState?.call(() {});
         final parsed = VoiceInputService.instance.parseIndonesianSpeech(text);
-        if (mounted) {
+        if (!mounted) return;
+
+        final wasExpense = _isExpense;
+        final typeChanged = wasExpense != parsed.isExpense;
+
+        if (typeChanged) {
           setState(() {
             _isExpense = parsed.isExpense;
-            if (parsed.amount != null && parsed.amount! > 0) {
-              _amountController.text = parsed.amount.toString();
-            }
-            if (text.isNotEmpty) {
-              _notesController.text = text;
-            }
+            _selectedCategory = null;
+          });
+          await _loadCategories();
+        }
+
+        if (mounted) {
+          setState(() {
+            _applyVoiceResult(parsed, text);
           });
         }
+        bsState?.call(() {});
       },
       onListeningStatusChanged: (status) {
         listening = status;
@@ -218,6 +279,8 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setBsState) {
           bsState = setBsState;
+          final currentAmount = int.tryParse(_amountController.text) ?? 0;
+
           return Padding(
             padding: const EdgeInsets.all(24),
             child: Column(
@@ -250,7 +313,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
                 const SizedBox(height: 8),
                 Text(
                   spokenText.isEmpty
-                      ? 'Katakan sesuatu seperti:\n"Pengeluaran 50 ribu makan siang"\natau "Pemasukan 2 juta gaji"'
+                      ? 'Katakan sesuatu seperti:\n"beli makan 10000"\natau "bayar internet 250 ribu"'
                       : '"$spokenText"',
                   textAlign: TextAlign.center,
                   style: GoogleFonts.plusJakartaSans(
@@ -258,6 +321,77 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
                     color: AppColors.subText(context),
                   ),
                 ),
+                if (spokenText.isNotEmpty) ...[
+                  const SizedBox(height: 14),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 14, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: _isExpense
+                          ? AppColors.expenseContainer.withValues(alpha: 0.5)
+                          : AppColors.incomeContainer.withValues(alpha: 0.5),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: _isExpense
+                            ? AppColors.expense.withValues(alpha: 0.2)
+                            : AppColors.primary.withValues(alpha: 0.2),
+                      ),
+                    ),
+                    child: Wrap(
+                      alignment: WrapAlignment.center,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      spacing: 8,
+                      runSpacing: 4,
+                      children: [
+                        Text(
+                          _isExpense ? 'Pengeluaran' : 'Pemasukan',
+                          style: GoogleFonts.plusJakartaSans(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                            color: _isExpense
+                                ? AppColors.expense
+                                : AppColors.primary,
+                          ),
+                        ),
+                        if (_selectedCategory != null) ...[
+                          const Text('•',
+                              style: TextStyle(color: Colors.grey)),
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                _selectedCategory!.icon,
+                                size: 14,
+                                color: _selectedCategory!.color,
+                              ),
+                              const SizedBox(width: 4),
+                              Text(
+                                _selectedCategory!.name,
+                                style: GoogleFonts.plusJakartaSans(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w700,
+                                  color: AppColors.bodyText(context),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                        if (currentAmount > 0) ...[
+                          const Text('•',
+                              style: TextStyle(color: Colors.grey)),
+                          Text(
+                            'Rp ${_formatThousands(currentAmount)}',
+                            style: GoogleFonts.plusJakartaSans(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w800,
+                              color: AppColors.bodyText(context),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 24),
                 ElevatedButton(
                   onPressed: () {
@@ -275,7 +409,8 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
                   ),
                   child: Text(
                     spokenText.isEmpty ? 'Tutup' : 'Gunakan Data Suara',
-                    style: GoogleFonts.plusJakartaSans(fontWeight: FontWeight.w700),
+                    style: GoogleFonts.plusJakartaSans(
+                        fontWeight: FontWeight.w700),
                   ),
                 ),
               ],
@@ -286,12 +421,178 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
     );
 
     // Ensure listening stopped when sheet is dismissed
-    VoiceInputService.instance.stopListening();
+    await VoiceInputService.instance.stopListening();
+
+    if (mounted && spokenText.isNotEmpty) {
+      final finalParsed =
+          VoiceInputService.instance.parseIndonesianSpeech(spokenText);
+      setState(() {
+        _applyVoiceResult(finalParsed, spokenText);
+      });
+
+      final info = <String>[
+        _isExpense ? 'Pengeluaran' : 'Pemasukan',
+      ];
+      if (_selectedCategory != null) info.add(_selectedCategory!.name);
+      final amt = int.tryParse(_amountController.text) ?? 0;
+      if (amt > 0) info.add('Rp ${_formatThousands(amt)}');
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Suara terbaca: ${info.join(' • ')}'),
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    }
+  }
+
+  String _formatThousands(int v) {
+    final s = v.toString();
+    final buf = StringBuffer();
+    for (var i = 0; i < s.length; i++) {
+      if (i > 0 && (s.length - i) % 3 == 0) buf.write('.');
+      buf.write(s[i]);
+    }
+    return buf.toString();
+  }
+
+  Future<void> _startReceiptScan() async {
+    final source = await showModalBottomSheet<ImageSource>(
+      context: context,
+      backgroundColor: AppColors.surface(context),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => Padding(
+        padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 16),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Scan Struk',
+              style: GoogleFonts.plusJakartaSans(
+                fontSize: 17,
+                fontWeight: FontWeight.w800,
+                color: AppColors.bodyText(context),
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'Foto struk belanja, total dan tanggalnya akan terisi otomatis.',
+              style: GoogleFonts.plusJakartaSans(
+                fontSize: 13,
+                color: AppColors.subText(context),
+              ),
+            ),
+            const SizedBox(height: 14),
+            ListTile(
+              leading: const Icon(Icons.photo_camera_rounded),
+              title: Text(
+                'Kamera',
+                style: GoogleFonts.plusJakartaSans(fontWeight: FontWeight.w600),
+              ),
+              onTap: () => Navigator.pop(ctx, ImageSource.camera),
+            ),
+            ListTile(
+              leading: const Icon(Icons.photo_library_rounded),
+              title: Text(
+                'Galeri / Upload',
+                style: GoogleFonts.plusJakartaSans(fontWeight: FontWeight.w600),
+              ),
+              onTap: () => Navigator.pop(ctx, ImageSource.gallery),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (source == null) return;
+
+    setState(() => _isScanning = true);
+    try {
+      final result = await ReceiptScanService.instance.scanReceipt(source);
+      if (!mounted) return;
+      if (result == null) return; // Pengguna membatalkan pemilihan gambar.
+      if (!result.foundAnything) {
+        if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Tidak ada data terbaca dari struk. Coba foto yang lebih jelas dan terang.',
+            ),
+          ),
+        );
+        return;
+      }
+
+      final wasIncome = !_isExpense;
+      setState(() {
+        // Struk belanja selalu pengeluaran.
+        _isExpense = true;
+        if (wasIncome) _selectedCategory = null;
+        if (result.amount != null && result.amount! > 0) {
+          _amountController.text = result.amount.toString();
+        }
+        if (result.date != null) _selectedDate = result.date!;
+        if (result.merchant != null && _notesController.text.trim().isEmpty) {
+          _notesController.text = 'Struk: ${result.merchant}';
+        }
+      });
+      if (wasIncome) {
+        await _loadCategories();
+      }
+
+      if (result.categorySuggestion != null && _categories.isNotEmpty) {
+        final suggestionLower = result.categorySuggestion!.toLowerCase();
+        final matchedCategory = _categories
+                .where((c) => c.name.toLowerCase() == suggestionLower)
+                .firstOrNull ??
+            _categories
+                .where((c) =>
+                    c.name.toLowerCase().contains(suggestionLower) ||
+                    suggestionLower.contains(c.name.toLowerCase()))
+                .firstOrNull;
+        if (matchedCategory != null && mounted) {
+          setState(() {
+            _selectedCategory = matchedCategory;
+          });
+        }
+      }
+
+      final found = <String>[];
+      if (result.amount != null) {
+        found.add('Rp ${_formatThousands(result.amount!)}');
+      }
+      if (result.merchant != null) found.add(result.merchant!);
+      if (_selectedCategory != null) found.add(_selectedCategory!.name);
+      if (result.date != null) found.add(_formatDate(result.date!));
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Struk terbaca: ${found.join(' â€¢ ')}.'
+            '${result.amount == null ? ' Total tidak terbaca, isi manual ya.' : ''}'
+            ' Cek lagi sebelum disimpan.',
+          ),
+        ),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Gagal memindai struk. Coba lagi.'),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _isScanning = false);
+    }
   }
 
   Future<void> _save() async {
     final amount = int.tryParse(_amountController.text) ?? 0;
     if (amount <= 0) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Jumlah harus lebih dari 0')),
       );
@@ -339,6 +640,28 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
         ),
         actions: [
           IconButton(
+            onPressed: _isScanning ? null : _startReceiptScan,
+            icon: Container(
+              width: 38,
+              height: 38,
+              decoration: BoxDecoration(
+                color: AppColors.incomeContainer,
+                shape: BoxShape.circle,
+              ),
+              child: _isScanning
+                  ? const Padding(
+                      padding: EdgeInsets.all(9),
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(
+                      Icons.document_scanner_outlined,
+                      color: AppColors.primary,
+                      size: 20,
+                    ),
+            ),
+            tooltip: 'Scan Struk',
+          ),
+          IconButton(
             onPressed: _startVoiceInput,
             icon: Container(
               width: 38,
@@ -366,7 +689,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // ── Toggle Type ──
+                  // â”€â”€ Toggle Type â”€â”€
                   _TypeToggle(
                     isExpense: _isExpense,
                     onChanged: (v) {
@@ -379,14 +702,14 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
                   ),
                   const SizedBox(height: 16),
 
-                  // ── Amount Card ──
+                  // â”€â”€ Amount Card â”€â”€
                   _AmountCard(
                     controller: _amountController,
                     focusNode: _amountFocus,
                   ),
                   const SizedBox(height: 20),
 
-                  // ── Kategori ──
+                  // â”€â”€ Kategori â”€â”€
                   _FieldLabel('Kategori'),
                   const SizedBox(height: 6),
                   _TapField(
@@ -404,7 +727,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
                   ),
                   const SizedBox(height: 14),
 
-                  // ── Tanggal ──
+                  // â”€â”€ Tanggal â”€â”€
                   _FieldLabel('Tanggal'),
                   const SizedBox(height: 6),
                   _TapField(
@@ -414,7 +737,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
                   ),
                   const SizedBox(height: 14),
 
-                  // ── Dompet ──
+                  // â”€â”€ Dompet â”€â”€
                   _FieldLabel('Dompet / Akun'),
                   const SizedBox(height: 6),
                   _TapField(
@@ -432,7 +755,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
                   ),
                   const SizedBox(height: 14),
 
-                  // ── Catatan ──
+                  // â”€â”€ Catatan â”€â”€
                   _FieldLabel('Catatan'),
                   const SizedBox(height: 6),
                   _NotesField(controller: _notesController),
@@ -441,7 +764,7 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
             ),
           ),
 
-          // ── Save Button ──
+          // â”€â”€ Save Button â”€â”€
           Padding(
             padding: EdgeInsets.fromLTRB(16, 8, 16, bottom + 16),
             child: SizedBox(
@@ -480,9 +803,9 @@ class _AddTransactionScreenState extends State<AddTransactionScreen> {
   }
 }
 
-// ═══════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 //  CATEGORY PICKER BOTTOM SHEET
-// ═══════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 class _CategoryPickerSheet extends StatelessWidget {
   const _CategoryPickerSheet({
     required this.categories,
@@ -585,9 +908,9 @@ class _CategoryPickerSheet extends StatelessWidget {
   }
 }
 
-// ═══════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 //  TYPE TOGGLE
-// ═══════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 class _TypeToggle extends StatelessWidget {
   const _TypeToggle({required this.isExpense, required this.onChanged});
   final bool isExpense;
@@ -656,9 +979,9 @@ class _ToggleBtn extends StatelessWidget {
   }
 }
 
-// ═══════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 //  AMOUNT CARD
-// ═══════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 class _AmountCard extends StatelessWidget {
   const _AmountCard({required this.controller, required this.focusNode});
   final TextEditingController controller;
@@ -727,9 +1050,9 @@ class _AmountCard extends StatelessWidget {
   }
 }
 
-// ═══════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 //  FIELD LABEL
-// ═══════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 class _FieldLabel extends StatelessWidget {
   const _FieldLabel(this.label);
   final String label;
@@ -747,9 +1070,9 @@ class _FieldLabel extends StatelessWidget {
   }
 }
 
-// ═══════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 //  TAP FIELD (Kategori, Tanggal, Dompet)
-// ═══════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 class _TapField extends StatelessWidget {
   const _TapField({
     required this.icon,
@@ -801,9 +1124,9 @@ class _TapField extends StatelessWidget {
 }
 
 
-// ═══════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 //  NOTES FIELD
-// ═══════════════════════════════════════
+// â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
 class _NotesField extends StatelessWidget {
   const _NotesField({required this.controller});
   final TextEditingController controller;

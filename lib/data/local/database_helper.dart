@@ -13,15 +13,34 @@ class DatabaseHelper {
     return _db!;
   }
 
-  // ── Init ──────────────────────────────────────────────
+  // â”€â”€ Init â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   Future<Database> _init() async {
     final dbPath = join(await getDatabasesPath(), 'catat_keuangan.db');
-    return openDatabase(
+    final db = await openDatabase(
       dbPath,
-      version: 3,
+      version: 4,
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
     );
+    await _ensureDefaultCategories(db);
+    return db;
+  }
+
+  Future<void> _ensureDefaultCategories(Database db) async {
+    final existing = await db.query(
+      'categories',
+      where: 'name = ? AND type = ?',
+      whereArgs: ['Internet', 'expense'],
+    );
+    if (existing.isEmpty) {
+      await db.insert('categories', {
+        'name': 'Internet',
+        'icon_code': Icons.wifi_rounded.codePoint,
+        'color_value': 0xFF0284C7,
+        'type': 'expense',
+        'created_at': DateTime.now().millisecondsSinceEpoch,
+      });
+    }
   }
 
   Future<void> _onUpgrade(Database db, int oldV, int newV) async {
@@ -52,6 +71,9 @@ class DatabaseHelper {
           created_at  INTEGER NOT NULL
         )
       ''');
+    }
+    if (oldV < 4) {
+      await _ensureDefaultCategories(db);
     }
   }
 
@@ -131,6 +153,7 @@ class DatabaseHelper {
       ('Makanan',     Icons.restaurant_outlined.codePoint,     teal),
       ('Transportasi',Icons.directions_car_outlined.codePoint, blue),
       ('Belanja',     Icons.shopping_bag_outlined.codePoint,   purple),
+      ('Internet',    Icons.wifi_rounded.codePoint,            0xFF0284C7),
       ('Kesehatan',   Icons.local_hospital_outlined.codePoint, red),
       ('Pendidikan',  Icons.school_outlined.codePoint,         amber),
       ('Rumah',       Icons.home_outlined.codePoint,           cyan),
@@ -165,7 +188,7 @@ class DatabaseHelper {
     }
   }
 
-  // ── Generic helpers ───────────────────────────────────
+  // â”€â”€ Generic helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
   Future<int> insert(String table, Map<String, dynamic> row) async {
     final db = await database;
     return db.insert(table, row, conflictAlgorithm: ConflictAlgorithm.replace);

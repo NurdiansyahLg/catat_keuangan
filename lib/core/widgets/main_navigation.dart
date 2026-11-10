@@ -17,6 +17,14 @@ class MainNavigation extends StatefulWidget {
 
 class _MainNavigationState extends State<MainNavigation> {
   int _currentIndex = 0;
+  final Set<int> _loadedTabs = {0};
+
+  void _onTabSelected(int index) {
+    setState(() {
+      _currentIndex = index;
+      _loadedTabs.add(index);
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -24,14 +32,22 @@ class _MainNavigationState extends State<MainNavigation> {
 
     final List<Widget> screens = [
       DashboardScreen(
-        onSeeAllTransactions: () => setState(() => _currentIndex = 1),
+        onSeeAllTransactions: () => _onTabSelected(1),
       ),
-      TransactionsScreen(
-        onOpenReports: () => setState(() => _currentIndex = 2),
-      ),
-      const ReportsScreen(),
-      const CategoriesScreen(),
-      const SettingsScreen(),
+      _loadedTabs.contains(1)
+          ? TransactionsScreen(
+              onOpenReports: () => _onTabSelected(2),
+            )
+          : const SizedBox.shrink(),
+      _loadedTabs.contains(2)
+          ? const ReportsScreen()
+          : const SizedBox.shrink(),
+      _loadedTabs.contains(3)
+          ? const CategoriesScreen()
+          : const SizedBox.shrink(),
+      _loadedTabs.contains(4)
+          ? const SettingsScreen()
+          : const SizedBox.shrink(),
     ];
 
     return Scaffold(
@@ -74,7 +90,7 @@ class _MainNavigationState extends State<MainNavigation> {
           ),
           child: NavigationBar(
             selectedIndex: _currentIndex,
-            onDestinationSelected: (i) => setState(() => _currentIndex = i),
+            onDestinationSelected: _onTabSelected,
             backgroundColor: AppColors.surface(context),
             elevation: 0,
             animationDuration: const Duration(milliseconds: 250),
